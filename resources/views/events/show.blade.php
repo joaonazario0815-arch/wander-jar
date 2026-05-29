@@ -1,64 +1,77 @@
 @extends('layouts.app')
 
-@section('title', ($event->title ?? 'Evento') . ' — Wander Jar')
+@section('title', $event->title . ' — Wander Jar')
 @section('page-id', 'events.show')
 
 @push('styles')
-  @vite('resources/css/events-show.css')
-
   <link
     rel="stylesheet"
     href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
     crossorigin=""
-  />
+  >
+
+  @vite('resources/css/events-show.css')
 @endpush
 
 @section('content')
-<section id="eventsShow">
-  <div class="wj-narrow">
+
+@php
+  $eventDate = $event->event_date ? \Carbon\Carbon::parse($event->event_date)->format('d/m/Y') : 'Sem data';
+  $eventTime = $event->event_time ? \Carbon\Carbon::parse($event->event_time)->format('H:i') : null;
+  $creatorName = $event->creator?->name ?? 'Utilizador';
+  $hasLocation = !empty($event->location_text);
+  $hasCoords = is_numeric($event->lat) && is_numeric($event->lng);
+  $isFull = $participantsCount >= (int) $event->max_participants;
+@endphp
+
+<main id="eventsShow">
+  <section class="wj-narrow">
 
     <div class="event-topbar">
-      <a class="event-back" href="{{ route('events.index') }}">
+      <a href="{{ route('events.index') }}" class="event-back">
         <i class="bi bi-arrow-left" aria-hidden="true"></i>
         <span>Voltar aos eventos</span>
       </a>
     </div>
 
-    <header class="event-hero">
+    <article class="event-hero">
       <div class="event-kicker">
-        <i class="bi bi-calendar2-event" aria-hidden="true"></i>
-        <span>Detalhes do evento</span>
+        <i class="bi bi-calendar-event" aria-hidden="true"></i>
+        <span>Evento</span>
       </div>
 
       <h1 class="event-title">
-        {{ $event->title ?? 'Sem título' }}
+        {{ $event->title }}
       </h1>
 
       <div class="event-subline">
         <span>
-          <i class="bi bi-geo-alt" aria-hidden="true"></i>
-          {{ $event->location_text ?? 'Sem localização definida' }}
+          <i class="bi bi-calendar3" aria-hidden="true"></i>
+          {{ $eventDate }}
         </span>
 
-        <span aria-hidden="true">•</span>
+        @if($eventTime)
+          <span>
+            <i class="bi bi-clock" aria-hidden="true"></i>
+            {{ $eventTime }}
+          </span>
+        @endif
 
-        <span>
-          <i class="bi bi-calendar-event" aria-hidden="true"></i>
-          {{ optional($event->event_date)->format('d/m/Y') ?? $event->event_date ?? 'Sem data definida' }}
-        </span>
-
-        <span aria-hidden="true">•</span>
-
-        <span>
-          <i class="bi bi-clock" aria-hidden="true"></i>
-          {{ $event->event_time ? \Carbon\Carbon::parse($event->event_time)->format('H:i') : 'Sem hora definida' }}
-        </span>
+        @if($hasLocation)
+          <span>
+            <i class="bi bi-geo-alt" aria-hidden="true"></i>
+            {{ $event->location_text }}
+          </span>
+        @endif
       </div>
 
-      <div class="event-pills" aria-label="Estado e participação no evento">
+      <div class="event-pills">
         <span class="event-pill">
           <i class="bi bi-people" aria-hidden="true"></i>
-          <span>{{ $participantsCount }} / {{ $event->max_participants }} participantes</span>
+          <span>
+            <span data-participants-count>{{ $participantsCount }} / {{ $event->max_participants }}</span>
+            participantes
+          </span>
         </span>
 
         @if($isActive)
@@ -69,7 +82,7 @@
         @else
           <span class="event-pill event-pill--off">
             <i class="bi bi-x-circle" aria-hidden="true"></i>
-            <span>Inativo ou terminado</span>
+            <span>Inativo</span>
           </span>
         @endif
 
@@ -78,34 +91,47 @@
             <i class="bi bi-star" aria-hidden="true"></i>
             <span>Criado por ti</span>
           </span>
-        @elseif($isJoined)
-          <span class="event-pill event-pill--ok">
+        @else
+          <span
+            class="event-pill event-pill--ok"
+            data-joined-pill
+            @if(!$isJoined) hidden @endif
+          >
             <i class="bi bi-check2-circle" aria-hidden="true"></i>
             <span>Estás a participar</span>
           </span>
         @endif
       </div>
 
-      <div class="event-actions">
+      <div
+        class="event-actions"
+        data-event-actions
+        data-join-url="{{ route('events.join', $event) }}"
+        data-leave-url="{{ route('events.leave', $event) }}"
+        data-max-participants="{{ $event->max_participants }}"
+      >
         @if($isCreator)
-          <a class="wj-btn wj-btn-primary" href="{{ route('events.edit', $event) }}">
+          <a href="{{ route('events.edit', $event) }}" class="wj-btn wj-btn-primary">
             <i class="bi bi-pencil-square" aria-hidden="true"></i>
             <span>Editar evento</span>
           </a>
-        @endif
 
-        @if(!$isActive)
-          <button type="button" class="wj-btn wj-btn-ghost" disabled>
-            <i class="bi bi-lock" aria-hidden="true"></i>
-            <span>Evento indisponível</span>
-          </button>
-        @elseif($isCreator)
           <button type="button" class="wj-btn wj-btn-ghost" disabled>
             <i class="bi bi-person-check" aria-hidden="true"></i>
             <span>És o criador</span>
           </button>
+        @elseif(!$isActive)
+          <button type="button" class="wj-btn wj-btn-ghost" disabled>
+            <i class="bi bi-x-circle" aria-hidden="true"></i>
+            <span>Evento indisponível</span>
+          </button>
         @elseif($isJoined)
-          <form method="POST" action="{{ route('events.leave', $event) }}">
+          <form
+            method="POST"
+            action="{{ route('events.leave', $event) }}"
+            data-event-participation-form
+            data-action-type="leave"
+          >
             @csrf
 
             <button type="submit" class="wj-btn wj-btn-danger">
@@ -113,8 +139,18 @@
               <span>Sair do evento</span>
             </button>
           </form>
+        @elseif($isFull)
+          <button type="button" class="wj-btn wj-btn-ghost" disabled>
+            <i class="bi bi-people-fill" aria-hidden="true"></i>
+            <span>Evento cheio</span>
+          </button>
         @else
-          <form method="POST" action="{{ route('events.join', $event) }}">
+          <form
+            method="POST"
+            action="{{ route('events.join', $event) }}"
+            data-event-participation-form
+            data-action-type="join"
+          >
             @csrf
 
             <button type="submit" class="wj-btn wj-btn-primary">
@@ -124,88 +160,99 @@
           </form>
         @endif
       </div>
-    </header>
+    </article>
 
-    <div class="event-grid">
-      <article class="event-card" aria-labelledby="event-description-title">
+    <section class="event-grid">
+      <article class="event-card">
         <div class="event-card__head">
-          <h2 id="event-description-title" class="event-card__title">
+          <h2 class="event-card__title">
             <i class="bi bi-card-text" aria-hidden="true"></i>
             <span>Descrição</span>
           </h2>
         </div>
 
-        <div class="event-text">
-          {!! nl2br(e($event->description ?? 'Sem descrição.')) !!}
-        </div>
+        @if($event->description)
+          <div class="event-text">
+            {!! nl2br(e($event->description)) !!}
+          </div>
+        @else
+          <p class="event-muted">
+            Este evento ainda não tem descrição.
+          </p>
+        @endif
       </article>
 
-      <aside class="event-card" aria-labelledby="event-details-title">
+      <aside class="event-card">
         <div class="event-card__head">
-          <h2 id="event-details-title" class="event-card__title">
+          <h2 class="event-card__title">
             <i class="bi bi-info-circle" aria-hidden="true"></i>
             <span>Detalhes</span>
           </h2>
-
-          <span class="event-badge">
-            {{ $isActive ? 'Ativo' : 'Inativo' }}
-          </span>
         </div>
 
-        <div class="event-muted">
-          <p>
-            <strong>Data:</strong>
-            <span>{{ optional($event->event_date)->format('d/m/Y') ?? $event->event_date ?? 'Sem data definida' }}</span>
-          </p>
+        <div class="event-detail-list">
+          <div class="event-detail">
+            <span class="event-muted">Criado por</span>
+            <strong>{{ $creatorName }}</strong>
+          </div>
 
-          <p>
-            <strong>Hora:</strong>
-            <span>{{ $event->event_time ? \Carbon\Carbon::parse($event->event_time)->format('H:i') : 'Sem hora definida' }}</span>
-          </p>
+          <div class="event-detail">
+            <span class="event-muted">Data</span>
+            <strong>{{ $eventDate }}</strong>
+          </div>
 
-          <p>
-            <strong>Criado por:</strong>
-            <span>{{ $event->creator->name ?? 'Utilizador desconhecido' }}</span>
-          </p>
+          @if($eventTime)
+            <div class="event-detail">
+              <span class="event-muted">Hora</span>
+              <strong>{{ $eventTime }}</strong>
+            </div>
+          @endif
 
-          <p>
-            <strong>Participantes:</strong>
-            <span>{{ $participantsCount }} / {{ $event->max_participants }}</span>
-          </p>
+          <div class="event-detail">
+            <span class="event-muted">Participantes</span>
+            <strong data-participants-count>{{ $participantsCount }} / {{ $event->max_participants }}</strong>
+          </div>
+
+          <div class="event-detail">
+            <span class="event-muted">Estado</span>
+            <strong>{{ $isActive ? 'Ativo' : 'Inativo' }}</strong>
+          </div>
         </div>
       </aside>
-    </div>
+    </section>
 
-    @if(!is_null($event->lat) && !is_null($event->lng))
-      <div class="event-locationline">
-        <i class="bi bi-geo-alt" aria-hidden="true"></i>
-        <span>{{ $event->location_text ?? 'Localização do evento' }}</span>
-        <span aria-hidden="true">•</span>
-        <span>{{ $event->lat }}, {{ $event->lng }}</span>
-      </div>
-
-      <section class="event-mapcard" aria-labelledby="event-map-title">
-        <div class="event-card__head event-mapcard__head">
-          <h2 id="event-map-title" class="event-card__title">
-            <i class="bi bi-map" aria-hidden="true"></i>
-            <span>Localização no mapa</span>
+    @if($hasLocation || $hasCoords)
+      <section class="event-mapcard">
+        <div class="event-card event-mapcard__head">
+          <h2 class="event-card__title">
+            <i class="bi bi-geo-alt" aria-hidden="true"></i>
+            <span>Localização</span>
           </h2>
+
+          @if($hasLocation)
+            <p class="event-locationline">
+              <i class="bi bi-pin-map" aria-hidden="true"></i>
+              <span>{{ $event->location_text }}</span>
+            </p>
+          @endif
         </div>
 
-        <div
-          id="eventShowMap"
-          class="event-map"
-          data-lat="{{ $event->lat }}"
-          data-lng="{{ $event->lng }}"
-          data-title="{{ $event->title ?? 'Evento' }}"
-          data-location="{{ $event->location_text ?? '' }}"
-          aria-label="Mapa com a localização do evento"
-        ></div>
+        @if($hasCoords)
+          <div
+            id="eventShowMap"
+            class="event-map"
+            data-lat="{{ $event->lat }}"
+            data-lng="{{ $event->lng }}"
+            data-title="{{ $event->title }}"
+            data-location="{{ $event->location_text }}"
+          ></div>
+        @endif
       </section>
     @endif
 
-  </div>
-</section>
+  </section>
+</main>
+
 @endsection
 
 @push('scripts')
@@ -214,43 +261,5 @@
     crossorigin=""
   ></script>
 
-  <script>
-    document.addEventListener('DOMContentLoaded', () => {
-      const mapEl = document.getElementById('eventShowMap');
-
-      if (!mapEl || typeof L === 'undefined') {
-        return;
-      }
-
-      const lat = Number(mapEl.dataset.lat);
-      const lng = Number(mapEl.dataset.lng);
-      const title = mapEl.dataset.title || 'Evento';
-      const location = mapEl.dataset.location || '';
-
-      if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
-        return;
-      }
-
-      const map = L.map(mapEl, {
-        zoomControl: true,
-        scrollWheelZoom: true,
-      }).setView([lat, lng], 14);
-
-      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        maxZoom: 19,
-        attribution: '&copy; OpenStreetMap',
-      }).addTo(map);
-
-      const marker = L.marker([lat, lng]).addTo(map);
-
-      marker.bindPopup(`
-        <strong>${title}</strong>
-        ${location ? `<br><span>${location}</span>` : ''}
-      `);
-
-      setTimeout(() => {
-        map.invalidateSize();
-      }, 250);
-    });
-  </script>
+  @vite('resources/js/events-show.js')
 @endpush

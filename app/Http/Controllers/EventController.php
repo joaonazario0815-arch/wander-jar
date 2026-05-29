@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\Event;
 use Carbon\Carbon;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Schema;
@@ -99,9 +100,43 @@ class EventController extends Controller
             return false;
         }
 
-        $dt = Carbon::parse($date . ' ' . $time);
+        $eventDateTime = Carbon::parse($date . ' ' . $time);
 
-        return $dt->isPast();
+        return $eventDateTime->isPast();
+    }
+
+    private function eventIsActive(Event $event): bool
+    {
+        if ($this->eventIsPast($event)) {
+            return false;
+        }
+
+        if (Schema::hasColumn('events', 'is_active')) {
+            return (bool) $event->is_active;
+        }
+
+        return true;
+    }
+
+    private function participationPayload(Event $event, string $message, bool $isJoined): array
+    {
+        $event->loadCount('participants');
+
+        $user = auth()->user();
+
+        return [
+            'message' => $message,
+            'participants_count' => (int) $event->participants_count,
+            'max_participants' => (int) $event->max_participants,
+            'is_joined' => $isJoined,
+            'is_creator' => $user ? $event->user_id === $user->id : false,
+            'is_active' => $this->eventIsActive($event),
+        ];
+    }
+
+    private function wantsJson(): bool
+    {
+        return request()->expectsJson() || request()->ajax();
     }
 
     public function index(Request $request): View
@@ -214,14 +249,9 @@ class EventController extends Controller
 
         $user = auth()->user();
 
-        $isCreator = $user ? ($event->user_id === $user->id) : false;
+        $isCreator = $user ? $event->user_id === $user->id : false;
         $isJoined = $user ? $event->participants->contains($user->id) : false;
-
-        $eventPast = $this->eventIsPast($event);
-
-        $hasIsActive = Schema::hasColumn('events', 'is_active');
-        $isActive = $hasIsActive ? (bool) $event->is_active : !$eventPast;
-
+        $isActive = $this->eventIsActive($event);
         $participantsCount = $event->participants->count();
 
         return view('events.show', compact(
@@ -282,62 +312,126 @@ class EventController extends Controller
             ->with('status', 'Evento atualizado com sucesso!');
     }
 
-    public function join(Event $event): RedirectResponse
+    public function join(Event $event): RedirectResponse|JsonResponse
     {
         $this->authorize('join', $event);
 
         $user = auth()->user();
 
         if (!$user) {
+            if ($this->wantsJson()) {
+                return response()->json([
+                    'message' => 'Precisas de iniciar sessão para participar neste evento.',
+                ], 401);
+            }
+
             return redirect()->route('login');
         }
 
-        if ($this->eventIsPast($event)) {
-            return back()->with('status', 'Este evento já terminou.');
-        }
+        if (!$this->eventIsActive($event)) {
+            $message = 'Este evento já não está disponível.';
 
-        if (Schema::hasColumn('events', 'is_active') && !$event->is_active) {
-            return back()->with('status', 'Este evento não está ativo.');
+            if ($this->wantsJson()) {
+                return response()->json([
+                    'message' => $message,
+                ], 422);
+            }
+
+            return back()->with('status', $message);
         }
 
         if ($event->participants()->where('users.id', $user->id)->exists()) {
-            return back()->with('status', 'Já estás inscrito neste evento.');
+            $message = 'Já estás inscrito neste evento.';
+
+            if ($this->wantsJson()) {
+                return response()->json(
+                    $this->participationPayload($event, $message, true)
+                );
+            }
+
+            return back()->with('status', $message);
         }
 
-        $count = $event->participants()->count();
+        $participantsCount = $event->participants()->count();
 
-        if ($count >= (int) $event->max_participants) {
-            return back()->with('status', 'O evento está cheio.');
+        if ($participantsCount >= (int) $event->max_participants) {
+            $message = 'O evento está cheio.';
+
+            if ($this->wantsJson()) {
+                return response()->json([
+                    'message' => $message,
+                ], 422);
+            }
+
+            return back()->with('status', $message);
         }
 
-        $event->participants()->attach($user->id);
+        $event->participants()->syncWithoutDetaching([$user->id]);
 
-        return back()->with('status', 'Inscrição feita com sucesso!');
+        $message = 'Inscrição feita com sucesso!';
+
+        if ($this->wantsJson()) {
+            return response()->json(
+                $this->participationPayload($event, $message, true)
+            );
+        }
+
+        return back()->with('status', $message);
     }
 
-    public function leave(Event $event): RedirectResponse
+    public function leave(Event $event): RedirectResponse|JsonResponse
     {
         $this->authorize('leave', $event);
 
         $user = auth()->user();
 
         if (!$user) {
+            if ($this->wantsJson()) {
+                return response()->json([
+                    'message' => 'Precisas de iniciar sessão.',
+                ], 401);
+            }
+
             return redirect()->route('login');
         }
 
-        if ($this->eventIsPast($event)) {
-            return back()->with('status', 'Este evento já terminou.');
+        if (!$this->eventIsActive($event)) {
+            $message = 'Este evento já não está disponível.';
+
+            if ($this->wantsJson()) {
+                return response()->json([
+                    'message' => $message,
+                ], 422);
+            }
+
+            return back()->with('status', $message);
         }
 
         $isParticipant = $event->participants()->where('users.id', $user->id)->exists();
 
         if (!$isParticipant) {
-            return back()->with('status', 'Tu não estás inscrito neste evento.');
+            $message = 'Tu não estás inscrito neste evento.';
+
+            if ($this->wantsJson()) {
+                return response()->json(
+                    $this->participationPayload($event, $message, false)
+                );
+            }
+
+            return back()->with('status', $message);
         }
 
         $event->participants()->detach($user->id);
 
-        return back()->with('status', 'Saíste do evento.');
+        $message = 'Saíste do evento.';
+
+        if ($this->wantsJson()) {
+            return response()->json(
+                $this->participationPayload($event, $message, false)
+            );
+        }
+
+        return back()->with('status', $message);
     }
 
     public function cancel(Event $event): RedirectResponse
